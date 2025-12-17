@@ -4,94 +4,108 @@ function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [socket, setSocket] = useState(null);
+  const [description, setDescription] = useState("Waiting for request...");
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // 1. Start the Camera
+  // 1. Start Camera
   useEffect(() => {
     const startWebcam = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 } // Lower res for faster processing
+          video: { width: 640, height: 480 }
         });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
+        if (videoRef.current) videoRef.current.srcObject = stream;
       } catch (err) {
         console.error("Error accessing webcam:", err);
       }
     };
-
     startWebcam();
   }, []);
 
-  // 2. Setup WebSocket Connection
+  // 2. WebSocket Connection
   useEffect(() => {
-    // Connect to the Python backend
     const ws = new WebSocket("ws://127.0.0.1:8000/ws");
-
-    ws.onopen = () => {
-      console.log("Connected to Backend");
-      setSocket(ws);
-    };
-
+    ws.onopen = () => setSocket(ws);
     ws.onmessage = (event) => {
-      // When Python sends back coordinates, draw them
       const detections = JSON.parse(event.data);
       drawBoxes(detections);
     };
-
-    return () => {
-      ws.close();
-    };
+    return () => ws.close();
   }, []);
 
-  // 3. Send Frames to Backend (Throttled)
+  // 3. Send Frames (Throttled)
   useEffect(() => {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
     const interval = setInterval(() => {
-      if (videoRef.current && canvasRef.current) {
-        // Create a temporary canvas to capture the frame
+      if (videoRef.current) {
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = 640;
         tempCanvas.height = 480;
         const ctx = tempCanvas.getContext('2d');
-        
-        // Draw video frame to temp canvas
         ctx.drawImage(videoRef.current, 0, 0, 640, 480);
-        
-        // Convert to Blob (JPEG) and send
         tempCanvas.toBlob((blob) => {
-          if (socket.readyState === WebSocket.OPEN) {
-             socket.send(blob);
-          }
-        }, 'image/jpeg', 0.5); // 0.5 quality to save bandwidth
+          if (socket.readyState === WebSocket.OPEN) socket.send(blob);
+        }, 'image/jpeg', 0.5);
       }
-    }, 100); // Send every 100ms (~10 FPS)
-
+    }, 100);
     return () => clearInterval(interval);
   }, [socket]);
 
-  // 4. Helper to Draw Boxes
+  // 4. Draw Boxes
   const drawBoxes = (detections) => {
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    
-    // Clear previous drawings
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Styling
-    ctx.strokeStyle = "#00FF00"; // Green Box
+    ctx.strokeStyle = "#00FF00";
     ctx.lineWidth = 2;
     ctx.font = "18px Arial";
     ctx.fillStyle = "#00FF00";
 
     detections.forEach(obj => {
-      // Draw Rectangle
       ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
-      
-      // Draw Label
       ctx.fillText(`${obj.label} (${Math.round(obj.confidence * 100)}%)`, obj.x, obj.y - 5);
     });
+  };
+
+  // --- NEW: The Magic Button Handler ---
+  const handleNarrate = async () => {
+    setIsSpeaking(true);
+    setDescription("Thinking...");
+    
+    // Capture the current frame
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 640;
+    tempCanvas.height = 480;
+    const ctx = tempCanvas.getContext('2d');
+    ctx.drawImage(videoRef.current, 0, 0, 640, 480);
+    
+    // Convert to Blob and send to API
+    tempCanvas.toBlob(async (blob) => {
+      const formData = new FormData();
+      formData.append("file", blob, "snapshot.jpg");
+
+      try {
+        const response = await fetch("http://127.0.0.1:8000/narrate", {
+          method: "POST",
+          body: formData
+        });
+        const data = await response.json();
+        
+        // Update Text
+        setDescription(data.text);
+        
+        // Play Audio
+        const audio = new Audio(data.audio_url);
+        audio.play();
+        audio.onended = () => setIsSpeaking(false);
+        
+      } catch (error) {
+        console.error("Narration failed:", error);
+        setIsSpeaking(false);
+        setDescription("Error getting description.");
+      }
+    }, 'image/jpeg');
   };
 
   return (
@@ -99,19 +113,6 @@ function App() {
       <h1 className="text-3xl font-bold text-white mb-6">AI Vision Explorer 👁️</h1>
       
       <div className="relative border-4 border-gray-700 rounded-lg overflow-hidden shadow-2xl">
-        {/* The Video Feed (Hidden from view, but active) */}
-        {/* We hide the video and show the canvas instead so we can draw on top */}
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          playsInline 
-          muted 
-          className="absolute top-0 left-0 w-full h-full object-cover z-0 opacity-0" 
-        />
-
-        {/* The Canvas (The real display) */}
-        {/* We actually need to DRAW the video onto this canvas first for the user to see it,
-            OR we can stack them. Let's stack them for simplicity. */}
         <div className="relative w-[640px] h-[480px]">
            <video 
             ref={videoRef} 
@@ -129,9 +130,26 @@ function App() {
         </div>
       </div>
 
-      <div className="mt-6 text-gray-400">
-        Pointing at: <span className="text-green-400 font-bold">Waiting for objects...</span>
+      {/* Description Box */}
+      <div className="mt-6 p-4 bg-gray-800 rounded-lg max-w-2xl w-full text-center border border-gray-700">
+        <p className="text-gray-300 text-lg italic">
+           "{description}"
+        </p>
       </div>
+
+      {/* The Button */}
+      <button 
+        onClick={handleNarrate}
+        disabled={isSpeaking}
+        className={`mt-6 px-8 py-3 rounded-full font-bold text-lg transition-all transform hover:scale-105 ${
+          isSpeaking 
+            ? "bg-gray-600 cursor-not-allowed" 
+            : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/50"
+        }`}
+      >
+        {isSpeaking ? "🔊 Speaking..." : "🔍 What is this?"}
+      </button>
+
     </div>
   );
 }

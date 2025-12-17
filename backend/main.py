@@ -1,64 +1,111 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware  # IMPORT THIS
+# backend/main.py
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles # Import StaticFiles
 from ultralytics import YOLO
 import cv2
 import numpy as np
-import json
+import google.generativeai as genai
+from gtts import gTTS
+import os
+import uuid
 
 app = FastAPI()
 
-# --- FIX 1: Add CORS Middleware ---
-# This allows the React app (port 5173) to talk to this Python app (port 8000)
+# 1. CORS Setup (Allows React to talk to Python)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# 2. AI Configuration
+# !!! PASTE YOUR API KEY HERE !!!
+GOOGLE_API_KEY = "AIzaSyB1wOqyPzzAw9g5GF87wtjqJ0VwDrnr6co" 
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# Gemini Model
+gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+
+# YOLO Model
 print("Loading YOLO model...")
 model = YOLO('yolov8m.pt')
 print("Model loaded successfully.")
 
+# 3. Create a folder for audio files if it doesn't exist
+if not os.path.exists("audio_store"):
+    os.makedirs("audio_store")
+
+# Mount the folder so React can access the MP3s via HTTP
+app.mount("/audio", StaticFiles(directory="audio_store"), name="audio")
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    print("✅ Client connected to WebSocket!") # Debug print
-
     try:
         while True:
-            # Receive data
             data = await websocket.receive_bytes()
-            
-            # --- FIX 2: Debug Print ---
-            # Uncomment the next line if you want to see a flood of "Frame received"
-            # print("Frame received, processing...") 
-
-            # Decode
             nparr = np.frombuffer(data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-            # Detect
+            
+            # Run YOLO
             results = model(img, conf=0.5)
-
+            
             detections = []
             for result in results:
                 for box in result.boxes:
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     label = model.names[int(box.cls[0])]
                     confidence = float(box.conf[0])
-
                     detections.append({
                         "x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1,
                         "label": label, "confidence": confidence
                     })
-            
-            # Send back
-            # print(f"Sending {len(detections)} detections") # Debug print
             await websocket.send_json(detections)
-
-    except WebSocketDisconnect:
-        print("Client disconnected")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Connection closed: {e}")
+
+@app.post("/narrate")
+async def narrate_image(file: UploadFile = File(...)):
+    print("📸 Image received for narration...")
+    
+    # Read Image
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    # Convert to RGB for Gemini
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    from PIL import Image
+    pil_image = Image.fromarray(img_rgb)
+
+    # Ask Gemini
+    print("🤖 Asking Gemini...")
+    try:
+        response = gemini_model.generate_content([
+            "Briefly describe the main object in this image. Keep it under 2 sentences. Be descriptive for a blind user.", 
+            pil_image
+        ])
+        description = response.text
+        print(f"🗣️ Gemini said: {description}")
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        return JSONResponse(content={"text": "Error connecting to AI.", "audio_url": ""})
+
+    # Generate Audio
+    audio_filename = f"narrate_{uuid.uuid4()}.mp3"
+    audio_path = os.path.join("audio_store", audio_filename)
+    
+    tts = gTTS(text=description, lang='en')
+    tts.save(audio_path)
+
+    # Return URL
+    # React will play: http://127.0.0.1:8000/audio/filename.mp3
+    return JSONResponse(content={
+        "text": description,
+        "audio_url": f"http://127.0.0.1:8000/audio/{audio_filename}"
+    })
