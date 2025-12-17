@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  # Service 1: The Python Backend
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"  # Map laptop port 8000 to container port 8000
+    volumes:
+      - ./backend:/app # "Hot Reload" - if you edit code on laptop, it updates in container
+      - /app/audio_store # Keep audio files safe if container restarts
+
+  # Service 2: The React Frontend
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173" # Map laptop port 5173 to container port 5173
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # Don't overwrite container's node_modules with your laptop's
+    depends_on:
+      - backend # Wait for backend to start before starting frontend
