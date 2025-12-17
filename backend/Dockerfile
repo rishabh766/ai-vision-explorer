@@ -6,7 +6,10 @@ WORKDIR /app
 
 # 3. Install system dependencies required for OpenCV
 # (OpenCV needs some video libraries that aren't in the basic Python image)
-RUN apt-get update && apt-get install -y libgl1-mesa-glx libglib2.0-0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # 4. Copy the "Shopping List" and install ingredients
 COPY requirements.txt .
