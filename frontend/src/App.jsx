@@ -6,6 +6,7 @@ function App() {
   const [socket, setSocket] = useState(null);
   const [description, setDescription] = useState("Waiting for request...");
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [question, setQuestion] = useState(""); // NEW: State for user question
 
   // 1. Start Camera
   useEffect(() => {
@@ -68,22 +69,25 @@ function App() {
     });
   };
 
-  // --- NEW: The Magic Button Handler ---
+  // --- UPDATED: Handle Question & Narrate ---
   const handleNarrate = async () => {
     setIsSpeaking(true);
     setDescription("Thinking...");
     
-    // Capture the current frame
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = 640;
     tempCanvas.height = 480;
     const ctx = tempCanvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0, 640, 480);
     
-    // Convert to Blob and send to API
     tempCanvas.toBlob(async (blob) => {
       const formData = new FormData();
       formData.append("file", blob, "snapshot.jpg");
+      
+      // NEW: Send the question if the user typed one
+      if (question.trim() !== "") {
+        formData.append("prompt", question);
+      }
 
       try {
         const response = await fetch("http://127.0.0.1:8000/narrate", {
@@ -92,10 +96,8 @@ function App() {
         });
         const data = await response.json();
         
-        // Update Text
         setDescription(data.text);
         
-        // Play Audio
         const audio = new Audio(data.audio_url);
         audio.play();
         audio.onended = () => setIsSpeaking(false);
@@ -109,10 +111,12 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
-      <h1 className="text-3xl font-bold text-white mb-6">AI Vision Explorer 👁️</h1>
+    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 font-sans">
+      <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-600 mb-6">
+        AI Vision Assistant
+      </h1>
       
-      <div className="relative border-4 border-gray-700 rounded-lg overflow-hidden shadow-2xl">
+      <div className="relative border-4 border-gray-700 rounded-xl overflow-hidden shadow-2xl mb-6">
         <div className="relative w-[640px] h-[480px]">
            <video 
             ref={videoRef} 
@@ -130,8 +134,19 @@ function App() {
         </div>
       </div>
 
+      {/* NEW: Input Section */}
+      <div className="w-full max-w-lg mb-4 flex gap-2">
+        <input 
+          type="text" 
+          placeholder="Ask a question (e.g., 'Is the bottle empty?')" 
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          className="flex-1 p-3 rounded-lg bg-gray-800 text-white border border-gray-600 focus:outline-none focus:border-blue-500 transition"
+        />
+      </div>
+
       {/* Description Box */}
-      <div className="mt-6 p-4 bg-gray-800 rounded-lg max-w-2xl w-full text-center border border-gray-700">
+      <div className="mb-6 p-4 bg-gray-800 rounded-lg max-w-2xl w-full text-center border border-gray-700 min-h-[80px] flex items-center justify-center">
         <p className="text-gray-300 text-lg italic">
            "{description}"
         </p>
@@ -141,13 +156,13 @@ function App() {
       <button 
         onClick={handleNarrate}
         disabled={isSpeaking}
-        className={`mt-6 px-8 py-3 rounded-full font-bold text-lg transition-all transform hover:scale-105 ${
+        className={`px-8 py-4 rounded-full font-bold text-xl transition-all transform hover:scale-105 shadow-xl ${
           isSpeaking 
             ? "bg-gray-600 cursor-not-allowed" 
-            : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/50"
+            : "bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white"
         }`}
       >
-        {isSpeaking ? "🔊 Speaking..." : "🔍 What is this?"}
+        {isSpeaking ? "🔊 Speaking..." : (question ? "🤖 Ask AI" : "🔍 Describe Scene")}
       </button>
 
     </div>

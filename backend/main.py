@@ -1,6 +1,6 @@
 # backend/main.py
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles # Import StaticFiles
@@ -69,43 +69,49 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"Connection closed: {e}")
 
+# backend/main.py (Partial update)
+
+# 1. Make sure you added 'Form' to your imports at the top!
+from fastapi import Form 
+
+# ... (rest of your code remains the same until the narrate function) ...
+
 @app.post("/narrate")
-async def narrate_image(file: UploadFile = File(...)):
-    print("📸 Image received for narration...")
+async def narrate_image(file: UploadFile = File(...), prompt: str = Form(None)):
+    print("📸 Image received...")
     
     # Read Image
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Convert to RGB for Gemini
+    # Convert to RGB
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     from PIL import Image
     pil_image = Image.fromarray(img_rgb)
 
-    # Ask Gemini
-    print("🤖 Asking Gemini...")
+    # Determine the Prompt
+    # If user provided a question, use it. Otherwise, use default description.
+    final_prompt = prompt if prompt else "Briefly describe the main object in this image. Keep it under 2 sentences."
+    
+    print(f"🤖 Asking Gemini: '{final_prompt}'")
+
     try:
-        response = gemini_model.generate_content([
-            "Briefly describe the main object in this image. Keep it under 2 sentences. Be descriptive for a blind user.", 
-            pil_image
-        ])
-        description = response.text
-        print(f"🗣️ Gemini said: {description}")
+        response = gemini_model.generate_content([final_prompt, pil_image])
+        text_response = response.text
+        print(f"🗣️ Gemini said: {text_response}")
     except Exception as e:
         print(f"Gemini Error: {e}")
         return JSONResponse(content={"text": "Error connecting to AI.", "audio_url": ""})
 
     # Generate Audio
-    audio_filename = f"narrate_{uuid.uuid4()}.mp3"
+    audio_filename = f"response_{uuid.uuid4()}.mp3"
     audio_path = os.path.join("audio_store", audio_filename)
     
-    tts = gTTS(text=description, lang='en')
+    tts = gTTS(text=text_response, lang='en')
     tts.save(audio_path)
 
-    # Return URL
-    # React will play: http://127.0.0.1:8000/audio/filename.mp3
     return JSONResponse(content={
-        "text": description,
+        "text": text_response,
         "audio_url": f"http://127.0.0.1:8000/audio/{audio_filename}"
     })
